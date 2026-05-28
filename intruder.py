@@ -3,7 +3,7 @@
 
 """
 Py-Intruder - Asynchronous HTTP Intruder Tool
-Công cụ kiểm thử xâm nhập HTTP bất đồng bộ thay thế Burp Suite Intruder.
+Cong cu fuzzer va brute-force HTTP bat dong bo hieu nang cao.
 """
 
 import argparse
@@ -20,120 +20,120 @@ async def send_request(
     semaphore: asyncio.Semaphore
 ) -> None:
     """
-    Gửi một HTTP GET request bất đồng bộ sau khi thay thế payload vào URL.
+    Gui request GET bat dong bo sau khi chen payload vao URL.
 
     Args:
-        client (httpx.AsyncClient): HTTP client bất đồng bộ dùng chung.
-        target_url (str): URL mục tiêu chứa ký tự placeholders '§§'.
-        payload (str): Chuỗi payload dùng để thay thế placeholders.
-        semaphore (asyncio.Semaphore): Đối tượng giới hạn số lượng request song song.
+        client (httpx.AsyncClient): Client HTTP bat dong bo dung chung.
+        target_url (str): URL muc tieu co chua ky tu §§.
+        payload (str): Payload dung de thay the §§.
+        semaphore (asyncio.Semaphore): Bo gioi han so request chay song song.
     """
-    # Thay thế ký tự §§ bằng payload thực tế
+    # Thay ky tu §§ bang payload thuc te
     formatted_url = target_url.replace("§§", payload)
 
-    # Sử dụng semaphore để kiểm soát giới hạn workers chạy đồng thời
+    # Dung semaphore de gioi han so luong request chay cung luc
     async with semaphore:
         try:
-            # Gửi request GET bất đồng bộ với cấu hình timeout mặc định 10 giây
+            # Gui request GET kem theo timeout 10 giay
             response = await client.get(formatted_url, timeout=10.0)
             
-            # In kết quả định dạng cơ bản: Payload: [content] | Status: [code]
+            # In ra ket qua theo dung format
             print(f"Payload: {payload:<20} | Status: {response.status_code}")
             
         except httpx.RequestError as exc:
-            # Xử lý các lỗi kết nối, DNS hoặc HTTP protocol
+            # Log loi neu khong ket noi duoc hoac bi timeout
             print(f"Payload: {payload:<20} | Status: ERROR (Request failed: {exc})")
         except Exception as exc:
-            # Xử lý các lỗi ngoại lệ phát sinh ngoài ý muốn khác
+            # Bat cac loi ngoai le khac phat sinh
             print(f"Payload: {payload:<20} | Status: ERROR (Unexpected: {exc})")
 
 
 async def run_intruder(target_url: str, wordlist_path: str, num_workers: int) -> None:
     """
-    Hàm điều phối chính đọc wordlist và quản lý vòng đời của các tiến trình bất đồng bộ.
+    Doc file wordlist va quan ly viec gui cac request bat dong bo.
 
     Args:
-        target_url (str): URL mục tiêu cần fuzzing.
-        wordlist_path (str): Đường dẫn đến file chứa các payload.
-        num_workers (int): Giới hạn số lượng request chạy song song tối đa.
+        target_url (str): URL muc tieu can test.
+        wordlist_path (str): Duong dan file wordlist chua payload.
+        num_workers (int): So luong luong chay song song.
     """
-    # Kiểm tra sự tồn tại của file Wordlist trước khi thực thi
+    # Check xem file wordlist co ton tai thuc su khong
     if not os.path.isfile(wordlist_path):
-        print(f"Lỗi: File wordlist không tồn tại tại đường dẫn: {wordlist_path}", file=sys.stderr)
+        print(f"Error: Wordlist file not found at: {wordlist_path}", file=sys.stderr)
         sys.exit(1)
 
-    # Kiểm tra xem URL mục tiêu có chứa ký tự §§ hay không
+    # Bat buoc URL phai co ky tu §§ de map payload
     if "§§" not in target_url:
-        print("Lỗi: URL mục tiêu phải chứa ký tự placeholders '§§' để thay thế payload.", file=sys.stderr)
+        print("Error: Target URL must contain '§§' placeholder.", file=sys.stderr)
         sys.exit(1)
 
-    # Đọc danh sách payload từ file wordlist
+    # Doc toan bo payload tu file, bo dong trong va khoang trang thua
     try:
         with open(wordlist_path, "r", encoding="utf-8", errors="ignore") as f:
-            # Loại bỏ khoảng trắng và dòng trống ở đầu/cuối của mỗi dòng
             payloads = [line.strip() for line in f if line.strip()]
+        # Truong hop dac biet can catch
     except Exception as e:
-        print(f"Lỗi khi đọc file wordlist: {e}", file=sys.stderr)
+        print(f"Error reading wordlist: {e}", file=sys.stderr)
         sys.exit(1)
 
     if not payloads:
-        print("Lỗi: File wordlist rỗng.", file=sys.stderr)
+        print("Error: Wordlist file is empty.", file=sys.stderr)
         sys.exit(1)
 
-    print(f"[*] Bắt đầu kiểm thử với {len(payloads)} payloads.")
-    print(f"[*] Số lượng luồng song song (Workers): {num_workers}")
+    print(f"[*] Starting intruder with {len(payloads)} payloads.")
+    print(f"[*] Concurrency limit (Workers): {num_workers}")
     print("-" * 60)
 
-    # Khởi tạo Semaphore để giới hạn số lượng request song song thực tế hoạt động
+    # Khoi tao semaphore de kiem soat luong
     semaphore = asyncio.Semaphore(num_workers)
 
-    # Khởi tạo AsyncClient để tái sử dụng connection pool, tối ưu hiệu năng
+    # Dung chung mot client session de tiet kiem tai nguyen va tang toc
     async with httpx.AsyncClient() as client:
-        # Tạo danh sách các task bất đồng bộ
+        # Tao list cac task can chay
         tasks = [
             send_request(client, target_url, payload, semaphore)
             for payload in payloads
         ]
-        # Kích hoạt thực thi đồng thời tất cả các task bằng asyncio.gather
+        # Chay tat ca cac task cung mot luc
         await asyncio.gather(*tasks)
 
     print("-" * 60)
-    print("[*] Hoàn thành quá trình quét.")
+    print("[*] Scan completed.")
 
 
 def main() -> None:
     """
-    Hàm entry point của script. Cấu hình argparse và tiếp nhận các đối số từ CLI.
+    Ham entry point de cau hinh argparse va chay event loop.
     """
     parser = argparse.ArgumentParser(
-        description="Py-Intruder - Công cụ fuzzer HTTP bất đồng bộ hiệu năng cao."
+        description="Py-Intruder - High-performance asynchronous HTTP fuzzer."
     )
     
-    # Định nghĩa các tham số đầu vào cho chương trình
+    # Dinh nghia cac tham so dong lenh
     parser.add_argument(
         "-u", "--url",
         required=True,
-        help="URL mục tiêu (cần chứa ký tự '§§' để chèn payload, ví dụ: http://example.com/?q=§§)"
+        help="Target URL containing '§§' placeholder (e.g., http://example.com/?q=§§)"
     )
     parser.add_argument(
         "-f", "--wordlist",
         required=True,
-        help="Đường dẫn đến file wordlist (chứa danh sách payload)"
+        help="Path to the wordlist file"
     )
     parser.add_argument(
         "-c", "--workers",
         type=int,
         default=10,
-        help="Số lượng kết nối song song (Mặc định: 10)"
+        help="Number of concurrent workers (Default: 10)"
     )
 
     args = parser.parse_args()
 
-    # Thực thi vòng lặp sự kiện bất đồng bộ chính (Asyncio Event Loop)
+    # Chay async event loop de xu ly
     try:
         asyncio.run(run_intruder(args.url, args.wordlist, args.workers))
     except KeyboardInterrupt:
-        print("\n[!] Tiến trình bị hủy bởi người dùng.")
+        print("\n[!] Process interrupted by user.")
         sys.exit(0)
 
 
