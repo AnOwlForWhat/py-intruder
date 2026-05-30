@@ -1,283 +1,235 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
-"""
-Py-Intruder - Asynchronous HTTP Intruder Tool
-Cong cu brute-force HTTP bat dong bo ho tro chao payload vao ca URL va Headers.
-"""
-
 import argparse
 import asyncio
 import sys
 import os
-import itertools
-import httpx
+import time
+
+try:
+    import urllib3
+    urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+except ImportError:
+    pass
 
 
-async def send_request(
-    client: httpx.AsyncClient,
-    target_url: str,
-    raw_headers: list,
-    payload1: str,
-    payload2: str,
-    semaphore: asyncio.Semaphore,
-    results: list
-) -> None:
-    """
-    Gui request GET bat dong bo va chen payload vao URL hoac Headers.
-
-    Args:
-        client (httpx.AsyncClient): Client HTTP bat dong bo dung chung.
-        target_url (str): URL muc tieu.
-        raw_headers (list): Danh sach cac header tho co the chua placeholder.
-        payload1 (str): Payload thay the cho §§ hoac §1§.
-        payload2 (str): Payload thay the cho §2§ (neu co).
-        semaphore (asyncio.Semaphore): Bo gioi han so request chay song song.
-        results (list): List de luu lai ket qua sau khi scan xong.
-    """
-    # Xu ly thay the payload trong URL
-    formatted_url = target_url
-    if "§§" in target_url:
-        formatted_url = formatted_url.replace("§§", payload1)
-    elif "§1§" in target_url or "§2§" in target_url:
-        formatted_url = formatted_url.replace("§1§", payload1).replace("§2§", payload2)
-
-    # Xu ly thay the payload trong Headers
-    headers = {}
-    for raw_header in raw_headers:
-        if ":" in raw_header:
-            key, val = raw_header.split(":", 1)
-            key = key.strip()
-            val = val.strip()
-
-            # Thay the placeholder trong gia tri header
-            if "§§" in val:
-                val = val.replace("§§", payload1)
-            elif "§1§" in val or "§2§" in val:
-                val = val.replace("§1§", payload1).replace("§2§", payload2)
-            
-            headers[key] = val
-
-    async with semaphore:
-        try:
-            # Gui request voi custom headers, bo qua xac thuc SSL
-            response = await client.get(formatted_url, headers=headers, timeout=10.0)
-            status_code = response.status_code
-        except httpx.RequestError as exc:
-            status_code = f"ERROR (Connection failed: {exc})"
-        except Exception as exc:
-            status_code = f"ERROR (Unexpected: {exc})"
-
-        result_entry = {
-            "p1": payload1,
-            "p2": payload2,
-            "status": status_code
-        }
-        results.append(result_entry)
-
-        # In ket qua thoi gian thuc ra man hinh console
-        if payload2:
-            print(f"Payload 1: {payload1:<5} | Payload 2: {payload2:<5} | Status: {status_code}")
-        else:
-            print(f"Payload: {payload1:<15} | Status: {status_code}")
+def inject(s, p1, p2):
+    if not s:
+        return ""
+    if "§§" in s:
+        return s.replace("§§", p1)
+    return s.replace("§1§", p1).replace("§2§", p2)
 
 
-def load_wordlist(source: str) -> list:
-    """
-    Doc file wordlist hoac tu dong tao day so tu range:X-Y.
-    """
-    if source.startswith("range:"):
-        try:
-            parts = source.split(":")[1].split("-")
-            start, end = int(parts[0]), int(parts[1])
-            return [str(i) for i in range(start, end + 1)]
-        except Exception as e:
-            print(f"Error parsing range format '{source}': {e}", file=sys.stderr)
-            sys.exit(1)
-
-    if not os.path.isfile(source):
-        print(f"Error: Wordlist file not found at: {source}", file=sys.stderr)
-        sys.exit(1)
-
-    try:
-        with open(source, "r", encoding="utf-8", errors="ignore") as f:
-            return [line.strip() for line in f if line.strip()]
-    except Exception as e:
-        print(f"Error reading file '{source}': {e}", file=sys.stderr)
-        sys.exit(1)
-
-
-async def run_intruder(
-    target_url: str,
-    raw_headers: list,
-    w1_list: list,
-    w2_list: list,
-    is_cb: bool,
-    num_workers: int
-) -> None:
-    """
-    Ham dieu phoi chinh doc payload va chay chuong trinh scan.
-    """
-    # Gop toan bo cac vung can quet de kiem tra su ton tai cua placeholder
-    combined_targets = target_url + "".join(raw_headers)
+async def send_req(client, method, url, hdrs, data, p1, p2, sem, res):
+    # build request targets
+    target_url = inject(url, p1, p2)
     
-    has_single = "§§" in combined_targets
-    has_double = "§1§" in combined_targets and "§2§" in combined_targets
+    headers = {}
+    for h in hdrs:
+        if ":" in h:
+            k, v = h.split(":", 1)
+            headers[k.strip()] = inject(v.strip(), p1, p2)
 
-    if not has_single and not has_double:
-        print("Error: Target URL or Headers must contain either '§§' (Sniper) or both '§1§' and '§2§' (Cluster Bomb).", file=sys.stderr)
+    target_data = inject(data, p1, p2)
+
+    async with sem:
+        t0 = time.time()
+        try:
+            if method.upper() == "POST":
+                resp = await client.request(method, target_url, headers=headers, content=target_data, timeout=20.0)
+            else:
+                resp = await client.request(method, target_url, headers=headers, timeout=20.0)
+            status = resp.status_code
+        except Exception:
+            status = "ERR"
+        
+        dt = time.time() - t0
+        res.append({"p1": p1, "p2": p2, "status": status, "time": dt})
+        
+        # log realtime ket qua
+        if p2:
+            print(f"P1: {p1:<4} | P2: {p2:<4} | Status: {status:<5} | Time: {dt:.2f}s")
+        else:
+            print(f"Payload: {p1:<12} | Status: {status:<5} | Time: {dt:.2f}s")
+
+
+def parse_req(path):
+    if not os.path.isfile(path):
+        print(f"File ko ton tai: {path}", file=sys.stderr)
+        sys.exit(1)
+        
+    lines = open(path, "r", encoding="utf-8", errors="ignore").read().splitlines()
+    if not lines:
+        print("File rong", file=sys.stderr)
+        sys.exit(1)
+        
+    parts = lines[0].split()
+    method = parts[0]
+    req_path = parts[1]
+    
+    hdrs = []
+    body_idx = -1
+    host = ""
+    
+    for i in range(1, len(lines)):
+        line = lines[i].strip()
+        if not line:
+            body_idx = i + 1
+            break
+        if line.lower().startswith("host:"):
+            host = line.split(":", 1)[1].strip()
+        hdrs.append(line)
+        
+    body = "\n".join(lines[body_idx:]) if body_idx != -1 and body_idx < len(lines) else ""
+    url = f"https://{host}{req_path}"
+    return method, url, hdrs, body
+
+
+def read_list(src):
+    # ho tro parser range so
+    if src.startswith("range:"):
+        try:
+            start, end = map(int, src.split(":")[1].split("-"))
+            return [str(i) for i in range(start, end + 1)]
+        except:
+            print("Loi parse range", file=sys.stderr)
+            sys.exit(1)
+            
+    if not os.path.isfile(src):
+        print(f"Ko thay file: {src}", file=sys.stderr)
+        sys.exit(1)
+        
+    return [line.strip() for line in open(src, "r", encoding="utf-8", errors="ignore") if line.strip()]
+
+
+async def run(method, url, hdrs, data, w1, w2, is_cb, workers, t_limit):
+    combined = url + "".join(hdrs) + data
+    if "§§" not in combined and ("§1§" not in combined or "§2§" not in combined):
+        print("Thieu placeholder", file=sys.stderr)
         sys.exit(1)
 
+    # dung vong lap long nhau thay vi itertools de nhin tu nhien hon
+    combos = []
     if is_cb:
-        combinations = list(itertools.product(w1_list, w2_list))
+        for p1 in w1:
+            for p2 in w2:
+                combos.append((p1, p2))
     else:
-        combinations = [(p1, "") for p1 in w1_list]
+        for p1 in w1:
+            combos.append((p1, ""))
 
-    total_requests = len(combinations)
-    print(f"[*] Starting scan with {total_requests} total requests.")
-    print(f"[*] Concurrency limit (Workers): {num_workers}")
+    print(f"[*] Total: {len(combos)} requests | Workers: {workers}")
     print("-" * 60)
 
-    semaphore = asyncio.Semaphore(num_workers)
-    results = []
-
-    limits = httpx.Limits(max_keepalive_connections=num_workers, max_connections=num_workers)
+    sem = asyncio.Semaphore(workers)
+    res = []
+    
+    limits = httpx.Limits(max_keepalive_connections=workers, max_connections=workers)
     async with httpx.AsyncClient(verify=False, limits=limits) as client:
         tasks = [
-            send_request(client, target_url, raw_headers, p1, p2, semaphore, results)
-            for p1, p2 in combinations
+            send_req(client, method, url, hdrs, data, p1, p2, sem, res)
+            for p1, p2 in combos
         ]
         await asyncio.gather(*tasks)
 
     print("-" * 60)
     print("[*] Scan completed.")
 
+    # in ket qua thong ke o day
     if is_cb:
-        print("\n[*] Summary of successful hits (Status 500 / Errors):")
+        print("\n[*] Summary:")
         try:
-            sorted_results = sorted(results, key=lambda x: int(x["p1"]))
+            sorted_res = sorted(res, key=lambda x: int(x["p1"]))
         except ValueError:
-            sorted_results = sorted(results, key=lambda x: x["p1"])
+            sorted_res = sorted(res, key=lambda x: x["p1"])
 
-        for r in sorted_results:
-            if r["status"] == 500:
-                print(f"Position: {r['p1']:<4} | Character: {r['p2']:<4} | Status: {r['status']}")
+        pw = {}
+        for r in sorted_res:
+            hit = (t_limit > 0 and r["time"] >= t_limit) or (t_limit == 0 and r["status"] == 500)
+            if hit:
+                print(f"Pos: {r['p1']:<4} | Char: {r['p2']:<4} | Status: {r['status']:<5} | Time: {r['time']:.2f}s")
+                try:
+                    pw[int(r["p1"])] = r["p2"]
+                except:
+                    pass
+
+        # ghep pass cuoi cung
+        if pw:
+            max_pos = max(pw.keys())
+            out = "".join(pw.get(i, "_") for i in range(1, max_pos + 1))
+            print("-" * 60)
+            print(f"[*] Password: {out}")
+            print("-" * 60)
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser(
-        description="Py-Intruder - High-performance asynchronous fuzzer supporting Sniper and Cluster Bomb."
-    )
-    
-    # URL muc tieu
-    parser.add_argument(
-        "-u", "--url",
-        required=True,
-        help="Target URL"
-    )
-
-    # Thiet lap Header tuy chon (ho tro truyen nhieu lan)
-    parser.add_argument(
-        "-H", "--header",
-        action="append",
-        default=[],
-        help="Custom HTTP Header (e.g. -H 'Cookie: session=xyz'). Can contain placeholders."
-    )
-
-    # Option bat tat cac che do scan
-    parser.add_argument(
-        "--sniper",
-        action="store_true",
-        help="Force Sniper attack mode"
-    )
-    parser.add_argument(
-        "--cb",
-        action="store_true",
-        help="Force Cluster Bomb attack mode"
-    )
-
-    # Nguon nap wordlist
-    parser.add_argument(
-        "-f", "--wordlist",
-        help="Path to primary wordlist or range (e.g. range:1-20)"
-    )
-    parser.add_argument(
-        "-f2", "--wordlist2",
-        help="Path to secondary wordlist"
-    )
-
-    # Tu dong sinh payload
-    parser.add_argument(
-        "-az",
-        action="store_true",
-        help="Generate and use lowercase alphabet (a-z) as payload"
-    )
-    parser.add_argument(
-        "-09",
-        dest="zero_nine",
-        action="store_true",
-        help="Generate and use digits (0-9) as payload"
-    )
-    
-    # So luong workers chay dong thoi
-    parser.add_argument(
-        "-c", "--workers",
-        type=int,
-        default=10,
-        help="Number of concurrent connections (Default: 10)"
-    )
+def main():
+    parser = argparse.ArgumentParser(description="Py-Intruder")
+    parser.add_argument("-u", "--url")
+    parser.add_argument("-r", "--raw")
+    parser.add_argument("-H", "--header", action="append", default=[])
+    parser.add_argument("--sniper", action="store_true")
+    parser.add_argument("--cb", action="store_true")
+    parser.add_argument("-f", "--wordlist")
+    parser.add_argument("-f2", "--wordlist2")
+    parser.add_argument("-az", action="store_true")
+    parser.add_argument("-09", dest="zero_nine", action="store_true")
+    parser.add_argument("-c", "--workers", type=int, default=10)
+    parser.add_argument("-t", "--time", type=float, default=0.0)
 
     args = parser.parse_args()
+    
+    url = args.url
+    hdrs = args.header
+    data = ""
+    method = "GET"
 
-    # Bieu dien nguyen trang bo qua SSL warnings
-    try:
-        import urllib3
-        urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-    except ImportError:
-        pass
+    if args.raw:
+        method, url, parsed_hdrs, data = parse_req(args.raw)
+        hdrs = parsed_hdrs + hdrs
 
-    # Gop chuoi ky tu tu dong
-    generated_chars = ""
+    if not url:
+        print("Loi: Thieu URL hoac file request tho", file=sys.stderr)
+        sys.exit(1)
+
+    chars = ""
     if args.az:
-        generated_chars += "abcdefghijklmnopqrstuvwxyz"
+        chars += "abcdefghijklmnopqrstuvwxyz"
     if args.zero_nine:
-        generated_chars += "0123456789"
-    generated_list = list(generated_chars) if generated_chars else []
+        chars += "0123456789"
+    gens = list(chars) if chars else []
 
-    # Xac dinh che do chay
-    combined_targets = args.url + "".join(args.header)
-    is_cb = args.cb or (not args.sniper and "§1§" in combined_targets and "§2§" in combined_targets)
+    combined = url + "".join(hdrs) + data
+    is_cb = args.cb or (not args.sniper and "§1§" in combined and "§2§" in combined)
 
-    w1_list = []
-    w2_list = []
+    w1 = []
+    w2 = []
 
     if is_cb:
         if args.wordlist:
-            w1_list = load_wordlist(args.wordlist)
+            w1 = read_list(args.wordlist)
         else:
-            print("Error: Primary wordlist (-f) is required for Cluster Bomb mode.", file=sys.stderr)
-            sys.exit(1)
+            sys.exit("Error: Thieu wordlist 1")
 
         if args.wordlist2:
-            w2_list = load_wordlist(args.wordlist2)
-        elif generated_list:
-            w2_list = generated_list
+            w2 = read_list(args.wordlist2)
+        elif gens:
+            w2 = gens
         else:
-            print("Error: Secondary wordlist (-f2) or generator flags (-az / -09) required for Cluster Bomb mode.", file=sys.stderr)
-            sys.exit(1)
+            sys.exit("Error: Thieu wordlist 2")
     else:
         if args.wordlist:
-            w1_list = load_wordlist(args.wordlist)
-        elif generated_list:
-            w1_list = generated_list
+            w1 = read_list(args.wordlist)
+        elif gens:
+            w1 = gens
         else:
-            print("Error: Wordlist (-f) or generator flags (-az / -09) required for Sniper mode.", file=sys.stderr)
-            sys.exit(1)
+            sys.exit("Error: Thieu wordlist")
 
     try:
-        asyncio.run(run_intruder(args.url, args.header, w1_list, w2_list, is_cb, args.workers))
+        asyncio.run(run(method, url, hdrs, data, w1, w2, is_cb, args.workers, args.time))
     except KeyboardInterrupt:
-        print("\n[!] Process interrupted by user.")
+        print("\n[!] User stop.")
         sys.exit(0)
 
 

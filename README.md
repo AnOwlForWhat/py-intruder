@@ -1,6 +1,6 @@
 # Py-Intruder
 
-Công cụ kiểm thử xâm nhập HTTP bất đồng bộ hiệu năng cao viết bằng Python, được thiết kế để thay thế cho tính năng Burp Suite Intruder (bản Community vốn giới hạn tốc độ). 
+Công cụ kiểm thử xâm nhập HTTP bất đồng bộ hiệu năng cao viết bằng Python, được thiết kế để thay thế cho tính năng Burp Suite Intruder (bản Community bị giới hạn tốc độ. burp intruder chậm vl dm burp 🖕🖕).
 
 Công cụ sử dụng thư viện `httpx` và cơ chế `asyncio` để tối ưu hóa việc gửi yêu cầu đồng thời (concurrency), giúp tăng tốc độ quét lỗ hổng bảo mật, brute-force hoặc fuzzing đường dẫn web.
 
@@ -18,7 +18,7 @@ Công cụ sử dụng thư viện `httpx` và cơ chế `asyncio` để tối �
 
 1. Clone dự án về máy:
 ```bash
-git clone https://github.com/<your-username>/py-intruder.git
+git clone https://github.com/AnOwlForWhat/py-intruder.git
 cd py-intruder
 ```
 
